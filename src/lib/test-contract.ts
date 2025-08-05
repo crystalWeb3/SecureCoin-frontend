@@ -46,7 +46,7 @@ export async function testContractIntegration() {
       return true;
       
     } catch (error) {
-      console.log('⚠️ Could not read contract data (wallet not connected):', error.message);
+      console.log('⚠️ Could not read contract data (wallet not connected):', (error as Error).message);
       console.log('💡 Connect your wallet to test full functionality');
       return false;
     }

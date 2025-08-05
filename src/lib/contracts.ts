@@ -60,21 +60,25 @@ export const NETWORK_CONFIG = {
 };
 
 // Helper function to get contract instance
-export const getContract = (address: string, abi: any[], signer?: ethers.Signer) => {
+export const getContract = (address: string, abi: ethers.ContractInterface) => {
   if (typeof window !== 'undefined' && window.ethereum) {
-    const provider = new ethers.providers.Web3Provider(window.ethereum);
-    const signerOrProvider = signer || provider.getSigner();
-    return new ethers.Contract(address, abi, signerOrProvider);
+    try {
+      const provider = new ethers.providers.Web3Provider(window.ethereum);
+      return new ethers.Contract(address, abi, provider.getSigner());
+    } catch (error: unknown) {
+      console.error('Error creating contract instance:', error);
+      return null;
+    }
   }
   return null;
 };
 
 // Helper function to get payment contract
-export const getPaymentContract = (signer?: ethers.Signer) => {
-  return getContract(CONTRACT_ADDRESSES.paymentContract, PAYMENT_CONTRACT_ABI, signer);
+export const getPaymentContract = () => {
+  return getContract(CONTRACT_ADDRESSES.paymentContract, PAYMENT_CONTRACT_ABI);
 };
 
 // Helper function to get USDT token contract
-export const getUSDTContract = (signer?: ethers.Signer) => {
-  return getContract(CONTRACT_ADDRESSES.usdtToken, USDT_TOKEN_ABI, signer);
+export const getUSDTContract = () => {
+  return getContract(CONTRACT_ADDRESSES.usdtToken, USDT_TOKEN_ABI);
 }; 

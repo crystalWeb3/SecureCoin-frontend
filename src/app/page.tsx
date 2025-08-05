@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { ethers } from 'ethers';
 import { getUSDTContract, CONTRACT_ADDRESSES } from '../lib/contracts';
 import { walletService, WalletInfo } from '../lib/wallet';
+import { WalletService } from '../lib/wallet';
 
 export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -21,104 +22,65 @@ export default function Home() {
 
   const handleCheckButton = async () => {
     if (!walletInfo) {
-      // If wallet is not connected, try to connect first
       await connectWallet();
-    } else {
-      // If wallet is already connected, open modal
-      setIsModalOpen(true);
-      await loadUSDTBalance();
     }
-  };
-
-  const connectWallet = async () => {
-    setIsConnecting(true);
-    setError(null);
-    
-    try {
-      const info = await walletService.connectWallet();
-      setWalletInfo(info);
-      setIsModalOpen(true);
-      await loadUSDTBalance();
-    } catch (error: any) {
-      setError(error.message || 'Failed to connect wallet');
-    } finally {
-      setIsConnecting(false);
-    }
+    setIsModalOpen(true);
   };
 
   const loadUSDTBalance = async () => {
+    if (!walletInfo?.address) return;
+    
     try {
       const usdtContract = getUSDTContract();
-      if (usdtContract) {
-        console.log('Loading USDT balance...');
-        
-        // Try to get balance with better error handling
-        try {
-          const balance = await usdtContract.balanceOf(CONTRACT_ADDRESSES.paymentContract);
-          const decimals = await usdtContract.decimals();
-          const formattedBalance = ethers.utils.formatUnits(balance, decimals);
-          setUsdtBalance(formattedBalance);
-          console.log('USDT balance loaded successfully:', formattedBalance);
-        } catch (balanceError: any) {
-          console.warn('Could not load USDT balance:', balanceError.message);
-          // Set a default value if we can't load the balance
-          setUsdtBalance('0.00');
-        }
+      if (!usdtContract) {
+        console.error('USDT contract not available');
+        return;
       }
-    } catch (error) {
+      const balance = await usdtContract.balanceOf(walletInfo.address);
+      setUsdtBalance(ethers.utils.formatUnits(balance, 18));
+    } catch (error: unknown) {
       console.error('Error loading USDT balance:', error);
-      // Set a default value on error
-      setUsdtBalance('0.00');
+      setUsdtBalance('0');
     }
   };
 
   const handleApprove = async () => {
-    if (!amount || parseFloat(amount) <= 0) {
-      alert('Please enter a valid amount');
-      return;
-    }
-
+    if (!walletInfo?.address || !amount) return;
+    
     setIsLoading(true);
-    setTransactionStatus(null);
-
+    setError(null);
+    
     try {
       const usdtContract = getUSDTContract();
-      if (!usdtContract) throw new Error('USDT contract not available');
-
-      const amountWei = ethers.utils.parseUnits(amount, 6); // USDT has 6 decimals
-      const tx = await usdtContract.approve(CONTRACT_ADDRESSES.paymentContract, amountWei);
+      if (!usdtContract) {
+        throw new Error('USDT contract not available');
+      }
+      const amountWei = ethers.utils.parseUnits(amount, 18);
       
-      setTransactionStatus({
-        hash: tx.hash,
-        status: 'pending',
-        message: 'Approving USDT for admin...'
-      });
-
-      const receipt = await tx.wait();
+      const tx = await usdtContract.approve(CONTRACT_ADDRESSES.paymentContract, amountWei);
+      await tx.wait();
       
       setTransactionStatus({
         hash: tx.hash,
         status: 'success',
-        message: 'USDT approved successfully! Admin can now charge this amount.'
+        message: 'USDT approval successful!'
       });
-
-      setAmount('');
-    } catch (error: any) {
-      // Improve error message display
+    } catch (error: unknown) {
       let errorMessage = 'Transaction failed';
-      
-      if (error.code === 'ACTION_REJECTED') {
-        errorMessage = 'Transaction was rejected by user';
-      } else if (error.message && error.message.includes('user rejected transaction')) {
-        errorMessage = 'Transaction was cancelled';
-      } else if (error.message && error.message.includes('insufficient funds')) {
-        errorMessage = 'Insufficient funds for transaction';
-      } else if (error.message && error.message.includes('gas')) {
-        errorMessage = 'Gas estimation failed';
-      } else if (error.message) {
-        // Extract a shorter, more readable error message
-        const message = error.message;
-        if (message.includes('execution reverted')) {
+      if (error && typeof error === 'object' && 'code' in error) {
+        const errorCode = (error as { code: string }).code;
+        if (errorCode === 'ACTION_REJECTED') {
+          errorMessage = 'Transaction was rejected by user';
+        } else if (errorCode === 'USER_REJECTED') {
+          errorMessage = 'Transaction was cancelled';
+        }
+      } else if (error && typeof error === 'object' && 'message' in error) {
+        const message = (error as { message: string }).message;
+        if (message.includes('insufficient funds')) {
+          errorMessage = 'Insufficient funds for transaction';
+        } else if (message.includes('gas')) {
+          errorMessage = 'Gas estimation failed';
+        } else if (message.includes('execution reverted')) {
           errorMessage = 'Transaction reverted - check your input';
         } else if (message.length > 100) {
           errorMessage = 'Transaction failed - please try again';
@@ -137,23 +99,20 @@ export default function Home() {
     }
   };
 
-  const disconnectWallet = async () => {
-    console.log('Disconnect button clicked');
+  const connectWallet = async () => {
+    setIsConnecting(true);
+    setError(null);
+    
     try {
-      // Clear state immediately for better UX
-      setWalletInfo(null);
-      setIsModalOpen(false);
-      setTransactionStatus(null);
-      setAmount('');
-      setError(null);
-      
-      // Then disconnect from wallet service
-      await walletService.disconnectWallet();
-      
-      console.log('Wallet disconnected successfully');
-    } catch (error) {
-      console.error('Error disconnecting wallet:', error);
-      // State is already cleared above, so no need to clear again
+      const walletService = new WalletService();
+      const walletInfo = await walletService.connectWallet();
+      setWalletInfo(walletInfo);
+      await loadUSDTBalance();
+    } catch (error: unknown) {
+      console.error('Error connecting wallet:', error);
+      setError('Failed to connect wallet');
+    } finally {
+      setIsConnecting(false);
     }
   };
 

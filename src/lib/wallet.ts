@@ -12,55 +12,32 @@ export class WalletService {
   private signer: ethers.Signer | null = null;
 
   async connectWallet(): Promise<WalletInfo> {
+    if (!window.ethereum) {
+      throw new Error('MetaMask is not installed');
+    }
+
     try {
-      if (typeof window === 'undefined' || !window.ethereum) {
-        throw new Error('MetaMask is not installed');
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' }) as string[];
+      const account = accounts[0];
+      
+      if (!account) {
+        throw new Error('No account selected');
       }
 
-      console.log('Connecting to wallet...');
+      const provider = new ethers.providers.Web3Provider(window.ethereum);
       
-      // Request account access
-      await window.ethereum.request({ method: 'eth_requestAccounts' });
+      await this.switchToBSC();
       
-      this.provider = new ethers.providers.Web3Provider(window.ethereum);
-      this.signer = this.provider.getSigner();
+      const balance = await this.getBalance(account);
       
-      const address = await this.signer.getAddress();
-      console.log('Wallet address:', address);
-      
-      // Check if we're on the correct network
-      const network = await this.provider.getNetwork();
-      console.log('Current network chainId:', network.chainId);
-      console.log('Expected chainId:', NETWORK_CONFIG.chainId);
-      
-      if (network.chainId !== NETWORK_CONFIG.chainId) {
-        console.log('Switching to BSC Testnet...');
-        await this.switchToBSC();
-        
-        // Verify network switch
-        const newNetwork = await this.provider.getNetwork();
-        console.log('Network after switch:', newNetwork.chainId);
-      }
-
-      // Get balance with error handling
-      let balance;
-      try {
-        balance = await this.provider.getBalance(address);
-        console.log('Balance fetched successfully');
-      } catch (error) {
-        console.warn('Could not fetch balance due to RPC error:', error);
-        // Set a default balance if RPC fails
-        balance = ethers.BigNumber.from(0);
-      }
-
       return {
-        address,
-        balance: ethers.utils.formatEther(balance),
+        address: account,
+        balance,
         isConnected: true
       };
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error connecting wallet:', error);
-      throw error;
+      throw new Error('Failed to connect wallet');
     }
   }
 
@@ -72,24 +49,11 @@ export class WalletService {
     try {
       await window.ethereum.request({
         method: 'wallet_switchEthereumChain',
-        params: [{ chainId: `0x${NETWORK_CONFIG.chainId.toString(16)}` }],
+        params: [{ chainId: `0x${NETWORK_CONFIG.chainId.toString(16)}` }]
       });
-    } catch (switchError: any) {
-      // This error code indicates that the chain has not been added to MetaMask
-      if (switchError.code === 4902) {
-        await window.ethereum.request({
-          method: 'wallet_addEthereumChain',
-          params: [{
-            chainId: `0x${NETWORK_CONFIG.chainId.toString(16)}`,
-            chainName: NETWORK_CONFIG.chainName,
-            nativeCurrency: NETWORK_CONFIG.nativeCurrency,
-            rpcUrls: [NETWORK_CONFIG.rpcUrl],
-            blockExplorerUrls: [NETWORK_CONFIG.explorer],
-          }],
-        });
-      } else {
-        throw switchError;
-      }
+    } catch (error: unknown) {
+      console.error('Error switching to BSC:', error);
+      throw new Error('Failed to switch to BSC Testnet');
     }
   }
 
@@ -124,6 +88,20 @@ export class WalletService {
 
   getSigner(): ethers.Signer | null {
     return this.signer;
+  }
+
+  async getBalance(address: string): Promise<string> {
+    try {
+      if (!window.ethereum) {
+        throw new Error('MetaMask not available');
+      }
+      const provider = new ethers.providers.Web3Provider(window.ethereum);
+      const balance = await provider.getBalance(address);
+      return ethers.utils.formatEther(balance);
+    } catch (error: unknown) {
+      console.error('Error fetching balance:', error);
+      return '0';
+    }
   }
 }
 
