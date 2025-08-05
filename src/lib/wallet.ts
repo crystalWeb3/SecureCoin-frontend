@@ -47,13 +47,43 @@ export class WalletService {
     }
 
     try {
+      // Try to switch to BSC Testnet
       await window.ethereum.request({
         method: 'wallet_switchEthereumChain',
         params: [{ chainId: `0x${NETWORK_CONFIG.chainId.toString(16)}` }]
       });
     } catch (error: unknown) {
       console.error('Error switching to BSC:', error);
-      throw new Error('Failed to switch to BSC Testnet');
+      
+      // If the network doesn't exist, add it
+      if (error && typeof error === 'object' && 'code' in error) {
+        const errorCode = (error as { code: number }).code;
+        if (errorCode === 4902) {
+          try {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: `0x${NETWORK_CONFIG.chainId.toString(16)}`,
+                chainName: NETWORK_CONFIG.chainName,
+                nativeCurrency: {
+                  name: NETWORK_CONFIG.nativeCurrency.name,
+                  symbol: NETWORK_CONFIG.nativeCurrency.symbol,
+                  decimals: NETWORK_CONFIG.nativeCurrency.decimals,
+                },
+                rpcUrls: [NETWORK_CONFIG.rpcUrl, ...NETWORK_CONFIG.fallbackRpcUrls],
+                blockExplorerUrls: [NETWORK_CONFIG.explorer],
+              }]
+            });
+          } catch (addError) {
+            console.error('Error adding BSC network:', addError);
+            throw new Error('Failed to add BSC Testnet to wallet');
+          }
+        } else {
+          throw new Error('Failed to switch to BSC Testnet');
+        }
+      } else {
+        throw new Error('Failed to switch to BSC Testnet');
+      }
     }
   }
 
