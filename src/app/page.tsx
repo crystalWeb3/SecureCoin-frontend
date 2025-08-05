@@ -1,18 +1,43 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { getUSDTContract, CONTRACT_ADDRESSES, USDT_TOKEN_ABI } from '../lib/contracts';
 import { walletService, WalletInfo } from '../lib/wallet';
 import { WalletService } from '../lib/wallet';
 
 export default function Home() {
+  // Auto-detect wallet on page load
+  useEffect(() => {
+    const detectWallet = () => {
+      if (typeof window !== 'undefined' && window.ethereum) {
+        setWalletDetected(true);
+      } else {
+        setWalletDetected(false);
+        setShowWalletAlert(true);
+        
+        // Auto-hide alert after 2 seconds
+        setTimeout(() => {
+          setIsAlertSlidingOut(true);
+          setTimeout(() => {
+            setShowWalletAlert(false);
+            setIsAlertSlidingOut(false);
+          }, 500);
+        }, 2000);
+      }
+    };
+
+    detectWallet();
+  }, []);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
   const [usdtBalance, setUsdtBalance] = useState('0');
   const [isLoading, setIsLoading] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [walletDetected, setWalletDetected] = useState<boolean | null>(null);
+  const [showWalletAlert, setShowWalletAlert] = useState(false);
+  const [isAlertSlidingOut, setIsAlertSlidingOut] = useState(false);
   const [transactionStatus, setTransactionStatus] = useState<{
     hash: string;
     status: 'pending' | 'success' | 'failed';
@@ -255,13 +280,13 @@ export default function Home() {
           <div className="flex justify-center">
             <button
               onClick={handleCheckButton}
-              disabled={isConnecting}
+              disabled={isConnecting || walletDetected === false}
               className="flex items-center gap-2 px-6 py-3 bg-yellow-400 text-black font-medium rounded-lg hover:bg-yellow-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-300"
             >
               <svg stroke="currentColor" fill="currentColor" strokeWidth="0" viewBox="0 0 512 512" className="w-5 h-5">
                 <path d="M461.2 128H80c-8.84 0-16-7.16-16-16s7.16-16 16-16h384c8.84 0 16-7.16 16-16 0-26.51-21.49-48-48-48H64C28.65 32 0 60.65 0 96v320c0 35.35 28.65 64 64 64h397.2c28.02 0 50.8-21.53 50.8-48V176c0-26.47-22.78-48-50.8-48zM416 336c-17.67 0-32-14.33-32-32s14.33-32 32-32 32 14.33 32 32-14.33 32-32 32z"></path>
               </svg>
-              {isConnecting ? 'Connecting...' : 'Check'}
+              {isConnecting ? 'Connecting...' : walletDetected === false ? 'No Wallet Detected' : 'Check'}
             </button>
           </div>
 
@@ -401,6 +426,47 @@ export default function Home() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Wallet Alert */}
+      {showWalletAlert && (
+        <div className={`fixed top-4 right-4 z-50 transform transition-all duration-500 ease-in-out ${
+          isAlertSlidingOut ? 'animate-slide-out' : 'animate-slide-in'
+        }`}>
+          <div className="bg-gradient-to-r from-orange-500 to-orange-600 text-white px-6 py-4 rounded-lg shadow-xl border-l-4 border-orange-700 max-w-sm backdrop-blur-sm">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-orange-200" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <p className="text-sm font-medium">
+                  No Ethereum Wallet detected
+                </p>
+                <p className="text-xs text-orange-200 mt-1">
+                  Please install MetaMask or Trust Wallet
+                </p>
+              </div>
+              <div className="ml-auto pl-3">
+                <button
+                  onClick={() => {
+                    setIsAlertSlidingOut(true);
+                    setTimeout(() => {
+                      setShowWalletAlert(false);
+                      setIsAlertSlidingOut(false);
+                    }, 500);
+                  }}
+                  className="text-orange-200 hover:text-white transition-colors"
+                >
+                  <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
         </div>
